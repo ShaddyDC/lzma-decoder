@@ -14,19 +14,21 @@
 #pragma warning(disable : 4996) // This function or variable may be unsafe
 #endif
 
-typedef unsigned char Byte;
-typedef unsigned short UInt16;
+namespace lh {
+
+	using Byte = unsigned char;
+	using UInt16 = unsigned short;
 
 #ifdef _LZMA_UINT32_IS_ULONG
-typedef unsigned long UInt32;
+	using UInt32 = unsigned long;
 #else
-typedef unsigned int UInt32;
+	using UInt32 = unsigned int;
 #endif
 
 #if defined(_MSC_VER) || defined(__BORLANDC__)
-typedef unsigned __int64 UInt64;
+	using UInt64 = unsigned __int64;
 #else
-typedef unsigned long long int UInt64;
+	using UInt64 = unsigned long long int;
 #endif
 
 #define kNumBitModelTotalBits 11
@@ -39,7 +41,7 @@ typedef unsigned long long int UInt64;
 
 
 
-typedef UInt16 CProb;
+	typedef UInt16 CProb;
 
 #define kNumPosBitsMax 4
 
@@ -58,222 +60,222 @@ typedef UInt16 CProb;
 #define LZMA_RES_FINISHED_WITH_MARKER    1
 #define LZMA_RES_FINISHED_WITHOUT_MARKER 2
 
-struct basic_input_stream {
-	virtual ~basic_input_stream() {}
+	struct basic_input_stream {
+		virtual ~basic_input_stream() {}
 
-	virtual  Byte ReadByte() = 0;
-};
+		virtual  Byte ReadByte() = 0;
+	};
 
-struct CInputStream : public basic_input_stream
-{
-	explicit CInputStream(FILE* file): File{file} { Processed = 0; }
-
-	FILE *File;
-	UInt64 Processed;
-
-	Byte ReadByte() override
+	struct CInputStream : public basic_input_stream
 	{
-		int c = getc(File);
-		if (c < 0)
-			throw "Unexpected end of file";
-		Processed++;
-		return (Byte)c;
-	}
-};
+		explicit CInputStream(FILE* file) : File{ file } { Processed = 0; }
 
-struct vector_input_stream : public basic_input_stream {
-	explicit vector_input_stream(const std::vector<Byte>& p_data)
-		: data{ p_data }, it{ data.cbegin() } {}
+		FILE *File;
+		UInt64 Processed;
 
-	const std::vector<Byte>& data;
-	std::vector<Byte>::const_iterator it;
+		Byte ReadByte() override
+		{
+			int c = getc(File);
+			if (c < 0)
+				throw "Unexpected end of file";
+			Processed++;
+			return (Byte)c;
+		}
+	};
 
-	Byte ReadByte() override
+	struct vector_input_stream : public basic_input_stream {
+		explicit vector_input_stream(const std::vector<Byte>& p_data)
+			: data{ p_data }, it{ data.cbegin() } {}
+
+		const std::vector<Byte>& data;
+		std::vector<Byte>::const_iterator it;
+
+		Byte ReadByte() override
+		{
+			if (data.cend() == it)
+				throw std::runtime_error{ "Reached end of vector!" };
+
+			Byte byte = *it;
+			++it;
+			return byte;
+		}
+	};
+
+
+	struct basic_output_stream {
+		virtual ~basic_output_stream() {}
+
+		virtual void WriteByte(Byte b) = 0;
+	};
+
+	struct vector_output_stream : public basic_output_stream {
+
+		std::vector<Byte> data;
+
+		void WriteByte(Byte b) override
+		{
+			data.push_back(b);
+		}
+		std::vector<Byte> get_data() { return data; }
+	};
+
+
+	struct COutStream : public basic_output_stream
 	{
-		if (data.cend() == it)
-			throw std::runtime_error{ "Reached end of vector!" };
+		FILE *File;
+		UInt64 Processed;
 
-		Byte byte = *it;
-		++it;
-		return byte;
-	}
-};
+		void Init() { Processed = 0; }
 
+		void WriteByte(Byte b)
+		{
+			if (putc(b, File) == EOF)
+				throw "File writing error";
+			Processed++;
+		}
+	};
 
-struct basic_output_stream {
-	virtual ~basic_output_stream() {}
-
-	virtual void WriteByte(Byte b) = 0;
-};
-
-struct vector_output_stream : public basic_output_stream {
-
-	std::vector<Byte> data;
-
-	void WriteByte(Byte b) override
+	class COutWindow
 	{
-		data.push_back(b);
-	}
-	std::vector<Byte> get_data() { return data; }
-};
+		Byte *Buf;
+		UInt32 Pos;
+		UInt32 Size;
+		bool IsFull;
 
+	public:
+		unsigned TotalPos;
+		basic_output_stream* OutStream;
 
-struct COutStream : public basic_output_stream
-{
-	FILE *File;
-	UInt64 Processed;
+		COutWindow(basic_output_stream* out_stream);
 
-	void Init() { Processed = 0; }
+		~COutWindow();
 
-	void WriteByte(Byte b)
+		void Create(UInt32 dictSize);
+
+		void PutByte(Byte b);
+
+		Byte GetByte(UInt32 dist) const;
+
+		void CopyMatch(UInt32 dist, unsigned len);
+
+		bool CheckDistance(UInt32 dist) const;
+
+		bool IsEmpty() const;
+	};
+
+	class CRangeDecoder
 	{
-		if (putc(b, File) == EOF)
-			throw "File writing error";
-		Processed++;
-	}
-};
+		UInt32 Range;
+		UInt32 Code;
 
-class COutWindow
-{
-	Byte *Buf;
-	UInt32 Pos;
-	UInt32 Size;
-	bool IsFull;
+		void Normalize();
 
-public:
-	unsigned TotalPos;
-	basic_output_stream* OutStream;
+	public:
 
-	COutWindow(basic_output_stream* out_stream);
+		basic_input_stream *InStream;
+		bool Corrupted;
 
-	~COutWindow();
+		bool Init();
+		bool IsFinishedOK() const { return Code == 0; }
 
-	void Create(UInt32 dictSize);
+		UInt32 DecodeDirectBits(unsigned numBits);
+		unsigned DecodeBit(CProb *prob);
+	};
 
-	void PutByte(Byte b);
-
-	Byte GetByte(UInt32 dist) const;
-
-	void CopyMatch(UInt32 dist, unsigned len);
-
-	bool CheckDistance(UInt32 dist) const;
-
-	bool IsEmpty() const;
-};
-
-class CRangeDecoder
-{
-	UInt32 Range;
-	UInt32 Code;
-
-	void Normalize();
-
-public:
-
-	basic_input_stream *InStream;
-	bool Corrupted;
-
-	bool Init();
-	bool IsFinishedOK() const { return Code == 0; }
-
-	UInt32 DecodeDirectBits(unsigned numBits);
-	unsigned DecodeBit(CProb *prob);
-};
-
-template <unsigned NumBits>
-class CBitTreeDecoder
-{
-	CProb Probs[(unsigned)1 << NumBits];
-
-public:
-
-	void Init()
+	template <unsigned NumBits>
+	class CBitTreeDecoder
 	{
-		INIT_PROBS(Probs);
-	}
+		CProb Probs[(unsigned)1 << NumBits];
 
-	unsigned Decode(CRangeDecoder *rc)
+	public:
+
+		void Init()
+		{
+			INIT_PROBS(Probs);
+		}
+
+		unsigned Decode(CRangeDecoder *rc)
+		{
+			unsigned m = 1;
+			for (unsigned i = 0; i < NumBits; i++)
+				m = (m << 1) + rc->DecodeBit(&Probs[m]);
+			return m - ((unsigned)1 << NumBits);
+		}
+
+		unsigned ReverseDecode(CRangeDecoder *rc)
+		{
+			return BitTreeReverseDecode(Probs, NumBits, rc);
+		}
+	};
+
+
+	class CLenDecoder
 	{
-		unsigned m = 1;
-		for (unsigned i = 0; i < NumBits; i++)
-			m = (m << 1) + rc->DecodeBit(&Probs[m]);
-		return m - ((unsigned)1 << NumBits);
-	}
+		CProb Choice;
+		CProb Choice2;
+		CBitTreeDecoder<3> LowCoder[1 << kNumPosBitsMax];
+		CBitTreeDecoder<3> MidCoder[1 << kNumPosBitsMax];
+		CBitTreeDecoder<8> HighCoder;
 
-	unsigned ReverseDecode(CRangeDecoder *rc)
+	public:
+
+		void Init();
+
+		unsigned Decode(CRangeDecoder* rc, unsigned posState);
+	};
+
+	class CLzmaDecoder
 	{
-		return BitTreeReverseDecode(Probs, NumBits, rc);
-	}
-};
+	public:
+		CRangeDecoder RangeDec;
+		COutWindow OutWindow;
 
+		bool markerIsMandatory;
+		unsigned lc, pb, lp;
+		UInt32 dictSize;
+		UInt32 dictSizeInProperties;
 
-class CLenDecoder
-{
-	CProb Choice;
-	CProb Choice2;
-	CBitTreeDecoder<3> LowCoder[1 << kNumPosBitsMax];
-	CBitTreeDecoder<3> MidCoder[1 << kNumPosBitsMax];
-	CBitTreeDecoder<8> HighCoder;
+		void DecodeProperties(const Byte* properties);
 
-public:
+		CLzmaDecoder(basic_output_stream* out_stream);
 
-	void Init();
+		~CLzmaDecoder();
 
-	unsigned Decode(CRangeDecoder* rc, unsigned posState);
-};
+		void Create();
 
-class CLzmaDecoder
-{
-public:
-	CRangeDecoder RangeDec;
-	COutWindow OutWindow;
+		int Decode(bool unpackSizeDefined, UInt64 unpackSize);
 
-	bool markerIsMandatory;
-	unsigned lc, pb, lp;
-	UInt32 dictSize;
-	UInt32 dictSizeInProperties;
+	private:
 
-	void DecodeProperties(const Byte* properties);
+		CProb *LitProbs;
 
-	CLzmaDecoder(basic_output_stream* out_stream);
+		void CreateLiterals();
 
-	~CLzmaDecoder();
+		void InitLiterals();
 
-	void Create();
+		void DecodeLiteral(unsigned state, UInt32 rep0);
 
-	int Decode(bool unpackSizeDefined, UInt64 unpackSize);
+		CBitTreeDecoder<6> PosSlotDecoder[kNumLenToPosStates];
+		CBitTreeDecoder<kNumAlignBits> AlignDecoder;
+		CProb PosDecoders[1 + kNumFullDistances - kEndPosModelIndex];
 
-private:
+		void InitDist();
 
-	CProb *LitProbs;
+		unsigned DecodeDistance(unsigned len);
 
-	void CreateLiterals();
+		CProb IsMatch[kNumStates << kNumPosBitsMax];
+		CProb IsRep[kNumStates];
+		CProb IsRepG0[kNumStates];
+		CProb IsRepG1[kNumStates];
+		CProb IsRepG2[kNumStates];
+		CProb IsRep0Long[kNumStates << kNumPosBitsMax];
 
-	void InitLiterals();
+		CLenDecoder LenDecoder;
+		CLenDecoder RepLenDecoder;
 
-	void DecodeLiteral(unsigned state, UInt32 rep0);
+		void Init();
+	};
 
-	CBitTreeDecoder<6> PosSlotDecoder[kNumLenToPosStates];
-	CBitTreeDecoder<kNumAlignBits> AlignDecoder;
-	CProb PosDecoders[1 + kNumFullDistances - kEndPosModelIndex];
-
-	void InitDist();
-
-	unsigned DecodeDistance(unsigned len);
-
-	CProb IsMatch[kNumStates << kNumPosBitsMax];
-	CProb IsRep[kNumStates];
-	CProb IsRepG0[kNumStates];
-	CProb IsRepG1[kNumStates];
-	CProb IsRepG2[kNumStates];
-	CProb IsRep0Long[kNumStates << kNumPosBitsMax];
-
-	CLenDecoder LenDecoder;
-	CLenDecoder RepLenDecoder;
-
-	void Init();
-};
-
-std::vector<Byte> lzma_decompress(const std::vector<Byte>& data);
-
+	std::vector<Byte> lzma_decompress(const std::vector<Byte>& data);
+}
 
